@@ -146,9 +146,10 @@ if ([string]::IsNullOrWhiteSpace($Tag)) {
 $zipName = "$TargetAbi-jellychwebhook_$pluginVersion.zip"
 $zipPath = Join-Path $distDir $zipName
 if ($HostBase -eq "https://github.com") {
-    $sourceUrl = "https://raw.githubusercontent.com/$Owner/$Repo/$pluginVersion/dist/$zipName"
+    $sourceUrl = "https://github.com/$Owner/$Repo/raw/refs/tags/$pluginVersion/dist/$zipName"
 }
 else {
+    # For Gitlab based repository
     $sourceUrl = "$HostBase/$Owner/$Repo/-/raw/$pluginVersion/dist/$zipName"
 }
 
