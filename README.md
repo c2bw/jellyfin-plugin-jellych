@@ -33,6 +33,7 @@ Then in Jellyfin admin, open **Dashboard -> Plugins -> Repositories**, add that 
 3. Save
 4. Go to Catalog, find **Jellych Webhook**, and install/update
 5. Restart Jellyfin when prompted
+6. Configure plugin (Plugins -> Jellych Webhook -> Configuration)
 
 ### Configuration Fields
 
