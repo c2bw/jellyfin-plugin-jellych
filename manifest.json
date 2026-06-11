@@ -6,6 +6,15 @@
         "overview":  "Forwards playback start/stop events to jellych server for tracking active streams",
         "owner":  "c2bw",
         "category":  "General",
-        "versions":  []
+        "versions":  [
+                         {
+                             "version":  "1.0.0.1",
+                             "changelog":  "Release 1.0.0.1",
+                             "targetAbi":  "10.11.8.0",
+                             "sourceUrl":  "https://raw.githubusercontent.com/c2bw/jellyfin-plugin-jellych/1.0.0.1/dist/10.11.8.0-jellychwebhook_1.0.0.1.zip",
+                             "checksum":  "5103982d54b109a7bde19d7cf32fff73",
+                             "timestamp":  "2026-06-11T10:38:23Z"
+                         }
+                     ]
     }
 ]
