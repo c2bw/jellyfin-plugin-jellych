@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <title>Jellych Webhook</title>
+    </head>
+
+    <body>
+        <div
+            id="JellychConfigPage"
+            data-role="page"
+            class="page type-interior pluginConfigurationPage"
+            data-require="emby-input,emby-button,emby-textarea"
+        >
+            <div data-role="content">
+                <div class="content-primary">
+                    <form id="JellychConfigForm">
+                        <div>
+                            <h1>Jellych Webhook</h1>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label
+                                class="inputLabel inputLabelUnfocused"
+                                for="TargetUrl"
+                                >Jellych server URL</label
+                            >
+                            <input
+                                id="TargetUrl"
+                                name="TargetUrl"
+                                type="text"
+                                is="emby-input"
+                                placeholder="http://server:8080"
+                            />
+                            <div class="fieldDescription">
+                                Base server URL only. The webhook endpoint is
+                                added automatically.
+                            </div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label
+                                class="inputLabel inputLabelUnfocused"
+                                for="SharedSecret"
+                                >Shared secret</label
+                            >
+                            <input
+                                id="SharedSecret"
+                                name="SharedSecret"
+                                type="text"
+                                is="emby-input"
+                            />
+                            <div class="fieldDescription">
+                                Must match the jellych server secret header
+                            </div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label
+                                class="inputLabel inputLabelUnfocused"
+                                for="RequestTimeoutSeconds"
+                                >Request timeout (seconds)</label
+                            >
+                            <input
+                                id="RequestTimeoutSeconds"
+                                name="RequestTimeoutSeconds"
+                                type="number"
+                                is="emby-input"
+                                min="1"
+                            />
+                            <div class="fieldDescription">
+                                HTTP timeout for webhook requests
+                            </div>
+                        </div>
+
+                        <div>
+                            <button
+                                is="emby-button"
+                                type="submit"
+                                class="raised button-submit block emby-button"
+                            >
+                                <span>Save</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <script type="text/javascript">
+                var JellychConfig = {
+                    pluginUniqueId: "a1f2b3c4-d5e6-4f7a-8b9c-1d2e3f4a5b6c",
+                };
+
+                document
+                    .querySelector("#JellychConfigPage")
+                    .addEventListener("pageshow", function () {
+                        Dashboard.showLoadingMsg();
+
+                        ApiClient.getPluginConfiguration(
+                            JellychConfig.pluginUniqueId,
+                        ).then(function (config) {
+                            document.querySelector("#TargetUrl").value =
+                                config.TargetUrl || "";
+                            document.querySelector("#SharedSecret").value =
+                                config.SharedSecret || "";
+                            document.querySelector(
+                                "#RequestTimeoutSeconds",
+                            ).value = config.RequestTimeoutSeconds || 3;
+                            Dashboard.hideLoadingMsg();
+                        });
+                    });
+
+                document
+                    .querySelector("#JellychConfigForm")
+                    .addEventListener("submit", function (e) {
+                        Dashboard.showLoadingMsg();
+
+                        ApiClient.getPluginConfiguration(
+                            JellychConfig.pluginUniqueId,
+                        ).then(function (config) {
+                            config.TargetUrl =
+                                document.querySelector("#TargetUrl").value;
+                            config.SharedSecret =
+                                document.querySelector("#SharedSecret").value;
+                            config.RequestTimeoutSeconds =
+                                parseInt(
+                                    document.querySelector(
+                                        "#RequestTimeoutSeconds",
+                                    ).value,
+                                    10,
+                                ) || 3;
+
+                            ApiClient.updatePluginConfiguration(
+                                JellychConfig.pluginUniqueId,
+                                config,
+                            ).then(function (result) {
+                                Dashboard.processPluginConfigurationUpdateResult(
+                                    result,
+                                );
+                            });
+                        });
+
+                        e.preventDefault();
+                        return false;
+                    });
+            </script>
+        </div>
+    </body>
+</html>

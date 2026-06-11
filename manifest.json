@@ -1,0 +1,11 @@
+﻿[
+    {
+        "guid":  "a1f2b3c4-d5e6-4f7a-8b9c-1d2e3f4a5b6c",
+        "name":  "Jellych Webhook",
+        "description":  "Forwards playback start/stop events to jellych server",
+        "overview":  "Forwards playback start/stop events to jellych server for tracking active streams",
+        "owner":  "c2bw",
+        "category":  "General",
+        "versions":  []
+    }
+]

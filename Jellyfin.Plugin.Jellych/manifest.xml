@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<PluginManifest>
+  <manifest version="1">
+    <id>jellychwebhook</id>
+    <name>Jellych Webhook</name>
+    <description>Forwards playback start/stop events to jellych server</description>
+    <version>1.0.0.0</version>
+    <author>c2bw</author>
+    <overview>Forwards playback start/stop events to jellych server for tracking active streams</overview>
+    <category>General</category>
+    <owner/>
+    <imageUrl/>
+    <changelog/>
+    <targetAbi>10.11.8.0</targetAbi>
+    <url>https://github.com/c2bw/jellyfin-plugin-jellych</url>
+    <expiredOn/>
+    <isNsfw>false</isNsfw>
+  </manifest>
+</PluginManifest>

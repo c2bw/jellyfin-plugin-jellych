@@ -1,0 +1,35 @@
+bin/
+obj/
+.vs/
+.idea/
+artifacts/
+nuget.config
+
+# VS Code
+.vscode/
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+
+# User-specific files
+*.user
+*.suo
+*.sln.docstates
+
+# OS-specific files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.dll
+*.pdb
+*.nupkg
+release/
+
+# IDE
+.vs/
+.idea/
+*.iml
+*.iws
