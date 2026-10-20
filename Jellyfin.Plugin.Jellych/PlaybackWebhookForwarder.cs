@@ -1,8 +1,10 @@
 using System;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellych.WebhookPlugin.Configuration;
@@ -25,44 +27,134 @@ public sealed class PlaybackWebhookForwarder : IDisposable
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    private readonly HttpClient _http;
+    private static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+    })
+    {
+        Timeout = Timeout.InfiniteTimeSpan,
+    };
+
+    private static readonly Regex ValidChannelNameRegex = new(
+        "^[a-z0-9_]{1,64}$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex LivePathChannelRegex = new(
+        @"/live/([A-Za-z0-9_]{1,64})/index\.m3u8(?:$|\?)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     private readonly ILogger<PlaybackWebhookForwarder>? _logger;
     private readonly PluginConfiguration _settings;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PlaybackWebhookForwarder"/> class.
+    /// </summary>
+    /// <param name="settings">Plugin configuration settings.</param>
+    /// <param name="logger">Optional logger instance.</param>
     public PlaybackWebhookForwarder(PluginConfiguration settings, ILogger<PlaybackWebhookForwarder>? logger = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _logger = logger;
-        var timeoutSeconds = settings.RequestTimeoutSeconds > 0 ? settings.RequestTimeoutSeconds : 3;
-        _http = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(timeoutSeconds),
-        };
     }
 
+    /// <summary>
+    /// Extracts a jellych channel name from a live HLS URL or path (e.g., <c>/live/channel/index.m3u8</c>).
+    /// </summary>
+    /// <param name="pathOrUrl">Stream path or URL.</param>
+    /// <param name="channel">Normalized lowercase channel name if matched.</param>
+    /// <returns><c>true</c> if the path matched a jellych live stream path; otherwise, <c>false</c>.</returns>
+    public static bool TryExtractChannelFromLivePath(string? pathOrUrl, out string channel)
+    {
+        channel = string.Empty;
+        if (string.IsNullOrWhiteSpace(pathOrUrl))
+        {
+            return false;
+        }
+
+        var pathMatch = LivePathChannelRegex.Match(pathOrUrl);
+        if (!pathMatch.Success)
+        {
+            return false;
+        }
+
+        channel = pathMatch.Groups[1].Value.ToLowerInvariant();
+        return true;
+    }
+
+    /// <summary>
+    /// Extracts and validates a jellych channel name from a raw source name or stream URL/path.
+    /// </summary>
+    /// <param name="candidate">Raw channel name or stream path.</param>
+    /// <param name="channel">Normalized lowercase channel name if valid.</param>
+    /// <returns><c>true</c> if a valid channel name was extracted; otherwise, <c>false</c>.</returns>
+    public static bool TryExtractChannelName(string? candidate, out string channel)
+    {
+        if (TryExtractChannelFromLivePath(candidate, out channel))
+        {
+            return true;
+        }
+
+        channel = string.Empty;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        var normalized = candidate.Trim().ToLowerInvariant();
+        if (!ValidChannelNameRegex.IsMatch(normalized))
+        {
+            return false;
+        }
+
+        channel = normalized;
+        return true;
+    }
+
+    /// <summary>
+    /// Sends a playback start webhook to jellych.
+    /// </summary>
+    /// <param name="sourceName">Playback source or channel name.</param>
+    /// <param name="sessionId">Stable Jellyfin session identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
     public Task OnPlaybackStartAsync(string sourceName, string sessionId, CancellationToken cancellationToken = default)
-        => SendAsync("start", sourceName, sessionId, pingBeforeSend: true, cancellationToken);
+        => SendAsync("start", sourceName, sessionId, cancellationToken);
 
+    /// <summary>
+    /// Sends a playback stop webhook to jellych.
+    /// </summary>
+    /// <param name="sourceName">Playback source or channel name.</param>
+    /// <param name="sessionId">Stable Jellyfin session identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
     public Task OnPlaybackStopAsync(string sourceName, string sessionId, CancellationToken cancellationToken = default)
-        => SendAsync("stop", sourceName, sessionId, pingBeforeSend: false, cancellationToken);
+        => SendAsync("stop", sourceName, sessionId, cancellationToken);
 
+    /// <summary>
+    /// Pings the jellych server to verify connectivity.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
     public async Task PingAsync(CancellationToken cancellationToken = default)
     {
         var pingUri = BuildApiUri(_settings.TargetUrl, PingPath);
         using var req = new HttpRequestMessage(HttpMethod.Get, pingUri);
 
-        if (!string.IsNullOrEmpty(_settings.SharedSecret))
+        var secret = _settings.SharedSecret?.Trim();
+        if (!string.IsNullOrEmpty(secret))
         {
-            req.Headers.Add("X-Jellych-Secret", _settings.SharedSecret);
+            req.Headers.Add("X-Jellych-Secret", secret);
         }
 
         _logger?.LogInformation("Pinging jellych API: GET {PingUri}", pingUri);
         JellychPluginLog.Write($"Pinging jellych API: GET {pingUri}");
 
+        using var timeoutCts = CreateTimeoutTokenSource(cancellationToken);
+
         try
         {
-            using var resp = await _http.SendAsync(req, cancellationToken).ConfigureAwait(false);
-            var responseBody = await resp.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            using var resp = await SharedHttpClient.SendAsync(req, timeoutCts.Token).ConfigureAwait(false);
+            var responseBody = await resp.Content.ReadAsStringAsync(timeoutCts.Token).ConfigureAwait(false);
             var responseMessage = "ok";
 
             if (!string.Equals(responseBody.Trim(), "pong", StringComparison.Ordinal))
@@ -87,18 +179,13 @@ public sealed class PlaybackWebhookForwarder : IDisposable
         }
     }
 
-    private async Task SendAsync(string action, string sourceName, string sessionId, bool pingBeforeSend, CancellationToken cancellationToken)
+    private async Task SendAsync(string action, string sourceName, string sessionId, CancellationToken cancellationToken)
     {
-        if (!TryMapChannel(sourceName, out var channel))
+        if (!TryExtractChannelName(sourceName, out var channel))
         {
-            _logger?.LogWarning("Skipping {Action} webhook because playback source name is empty", action);
-            JellychPluginLog.Write($"Skipping {action} webhook because playback source name is empty");
+            _logger?.LogDebug("Skipping {Action} webhook because playback source '{SourceName}' is not a valid jellych channel name", action, sourceName);
+            JellychPluginLog.Write($"Skipping {action} webhook because playback source '{sourceName}' is not a valid jellych channel name");
             return;
-        }
-
-        if (pingBeforeSend)
-        {
-            await PingAsync(cancellationToken).ConfigureAwait(false);
         }
 
         var webhookUri = BuildApiUri(_settings.TargetUrl, WebhookPath);
@@ -114,7 +201,13 @@ public sealed class PlaybackWebhookForwarder : IDisposable
         {
             Content = new StringContent(payloadJson, Encoding.UTF8, "application/json"),
         };
-        req.Headers.Add("X-Jellych-Secret", _settings.SharedSecret);
+
+        var secret = _settings.SharedSecret?.Trim();
+        if (!string.IsNullOrEmpty(secret))
+        {
+            req.Headers.Add("X-Jellych-Secret", secret);
+        }
+
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         _logger?.LogInformation(
@@ -126,10 +219,23 @@ public sealed class PlaybackWebhookForwarder : IDisposable
             payloadJson);
         JellychPluginLog.Write($"Sending webhook: POST {webhookUri} action={action} channel={channel} session={sessionId} body={payloadJson}");
 
+        using var timeoutCts = CreateTimeoutTokenSource(cancellationToken);
+
         try
         {
-            using var resp = await _http.SendAsync(req, cancellationToken).ConfigureAwait(false);
-            var responseBody = await resp.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            using var resp = await SharedHttpClient.SendAsync(req, timeoutCts.Token).ConfigureAwait(false);
+            var responseBody = await resp.Content.ReadAsStringAsync(timeoutCts.Token).ConfigureAwait(false);
+
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+            {
+                _logger?.LogInformation(
+                    "Webhook ignored by jellych (channel not configured): action={Action} channel={Channel} session={SessionId}",
+                    action,
+                    channel,
+                    sessionId);
+                JellychPluginLog.Write($"Webhook ignored by jellych (channel not configured): action={action} channel={channel} session={sessionId}");
+                return;
+            }
 
             _logger?.LogInformation(
                 "Webhook response: {StatusCode} {ReasonPhrase}",
@@ -152,17 +258,12 @@ public sealed class PlaybackWebhookForwarder : IDisposable
         }
     }
 
-    private bool TryMapChannel(string sourceName, out string channel)
+    private CancellationTokenSource CreateTimeoutTokenSource(CancellationToken cancellationToken)
     {
-        channel = string.Empty;
-        if (string.IsNullOrWhiteSpace(sourceName))
-        {
-            return false;
-        }
-
-        // Use the playback source name directly as the jellych channel.
-        channel = sourceName.Trim().ToLowerInvariant();
-        return true;
+        var timeoutSeconds = _settings.RequestTimeoutSeconds > 0 ? _settings.RequestTimeoutSeconds : 3;
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        return cts;
     }
 
     private static string BuildApiUri(string serverUrl, string path)
@@ -172,25 +273,47 @@ public sealed class PlaybackWebhookForwarder : IDisposable
             return path;
         }
 
-        if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var baseUri))
+        var trimmedServerUrl = serverUrl.Trim();
+        var normalizedPath = path.StartsWith('/') ? path : $"/{path}";
+
+        if (Uri.TryCreate(trimmedServerUrl, UriKind.Absolute, out var baseUri))
         {
+            var basePath = baseUri.AbsolutePath.TrimEnd('/');
             var builder = new UriBuilder(baseUri)
             {
-                Path = path,
+                Path = string.IsNullOrEmpty(basePath) ? normalizedPath : $"{basePath}{normalizedPath}",
             };
 
             return builder.Uri.ToString();
         }
 
-        return $"{serverUrl.TrimEnd('/')}{path}";
+        return $"{trimmedServerUrl.TrimEnd('/')}{normalizedPath}";
     }
 
-    public void Dispose() => _http.Dispose();
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        // SharedHttpClient is reused across the plugin lifetime to avoid socket exhaustion.
+    }
 }
 
+/// <summary>
+/// Payload sent to the jellych Jellyfin webhook endpoint.
+/// </summary>
 public sealed class WebhookPayload
 {
+    /// <summary>
+    /// Gets or sets the playback action ("start" or "stop").
+    /// </summary>
     public string Action { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the normalized Twitch channel name.
+    /// </summary>
     public string Channel { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the Jellyfin playback session identifier.
+    /// </summary>
     public string SessionId { get; set; } = string.Empty;
 }

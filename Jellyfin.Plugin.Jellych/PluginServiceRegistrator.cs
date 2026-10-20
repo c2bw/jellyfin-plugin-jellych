@@ -1,5 +1,6 @@
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Events;
+using MediaBrowser.Controller.Events.Session;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,5 +18,6 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHostedService<JellychStartupPingService>();
         serviceCollection.AddSingleton<IEventConsumer<PlaybackStartEventArgs>, PlaybackStartEventConsumer>();
         serviceCollection.AddSingleton<IEventConsumer<PlaybackStopEventArgs>, PlaybackStopEventConsumer>();
+        serviceCollection.AddSingleton<IEventConsumer<SessionEndedEventArgs>, SessionEndedEventConsumer>();
     }
 }

@@ -6,6 +6,8 @@ namespace Jellych.WebhookPlugin;
 
 internal static class JellychPluginLog
 {
+    private static readonly object SyncLock = new();
+
     public static void Write(string message)
     {
         try
@@ -16,10 +18,13 @@ internal static class JellychPluginLog
                 return;
             }
 
-            Directory.CreateDirectory(logDirectory);
-            var logPath = Path.Combine(logDirectory, "jellych-plugin.log");
-            var timestamp = DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture);
-            File.AppendAllText(logPath, $"{timestamp} {message}{Environment.NewLine}");
+            lock (SyncLock)
+            {
+                Directory.CreateDirectory(logDirectory);
+                var logPath = Path.Combine(logDirectory, "jellych-plugin.log");
+                var timestamp = DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture);
+                File.AppendAllText(logPath, $"{timestamp} {message}{Environment.NewLine}");
+            }
         }
         catch
         {

@@ -38,7 +38,7 @@ if %ERRORLEVEL% neq 0 goto error
 echo.
 echo Build succeeded!
 echo.
-echo Plugin DLL: src\bin\Release\net8.0\Jellych.WebhookPlugin.dll
+echo Plugin DLL: Jellyfin.Plugin.Jellych\bin\Release\net10.0\Jellych.WebhookPlugin.dll
 echo.
 
 exit /b 0

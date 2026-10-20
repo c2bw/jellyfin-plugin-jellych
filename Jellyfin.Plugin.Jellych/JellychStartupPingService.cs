@@ -15,6 +15,11 @@ public sealed class JellychStartupPingService : IHostedService
     private readonly ILogger<JellychStartupPingService> _logger;
     private readonly ILogger<PlaybackWebhookForwarder> _forwarderLogger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="JellychStartupPingService"/> class.
+    /// </summary>
+    /// <param name="logger">Service logger.</param>
+    /// <param name="forwarderLogger">Webhook forwarder logger.</param>
     public JellychStartupPingService(
         ILogger<JellychStartupPingService> logger,
         ILogger<PlaybackWebhookForwarder> forwarderLogger)
@@ -52,10 +57,19 @@ public sealed class JellychStartupPingService : IHostedService
     }
 
     /// <inheritdoc />
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Jellych plugin startup ping service stopping");
         JellychPluginLog.Write("Jellych plugin startup ping service stopping");
-        return Task.CompletedTask;
+
+        try
+        {
+            await PlaybackSessionTracker.Instance.StopAllActiveSessionsAsync(_forwarderLogger, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to stop active Jellych sessions during shutdown");
+            JellychPluginLog.Write($"Failed to stop active Jellych sessions during shutdown: {ex}");
+        }
     }
 }
