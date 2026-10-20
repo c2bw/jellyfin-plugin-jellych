@@ -3,7 +3,7 @@ param(
     [string]$Owner,
     [string]$Repo,
     [string]$Tag,
-    [string]$TargetAbi = "10.11.8.0",
+    [string]$TargetAbi = "12.0.0.0",
     [switch]$SkipBuild
 )
 
@@ -81,7 +81,7 @@ $csprojPath = Join-Path $repoRoot "Jellyfin.Plugin.Jellych\Jellyfin.Plugin.Jelly
 $solutionPath = Join-Path $repoRoot "Jellyfin.Plugin.Jellych.sln"
 $manifestPath = Join-Path $repoRoot "manifest.json"
 $pluginManifestPath = Join-Path $repoRoot "Jellyfin.Plugin.Jellych\manifest.xml"
-$dllPath = Join-Path $repoRoot "Jellyfin.Plugin.Jellych\bin\Release\net9.0\Jellych.WebhookPlugin.dll"
+$dllPath = Join-Path $repoRoot "Jellyfin.Plugin.Jellych\bin\Release\net10.0\Jellych.WebhookPlugin.dll"
 $distDir = Join-Path $repoRoot "dist"
 
 if (-not (Test-Path $solutionPath)) {

@@ -10,7 +10,7 @@
             id="JellychConfigPage"
             data-role="page"
             class="page type-interior pluginConfigurationPage"
-            data-require="emby-input,emby-button,emby-textarea"
+            data-require="emby-input,emby-button"
         >
             <div data-role="content">
                 <div class="content-primary">
@@ -98,16 +98,20 @@
 
                         ApiClient.getPluginConfiguration(
                             JellychConfig.pluginUniqueId,
-                        ).then(function (config) {
-                            document.querySelector("#TargetUrl").value =
-                                config.TargetUrl || "";
-                            document.querySelector("#SharedSecret").value =
-                                config.SharedSecret || "";
-                            document.querySelector(
-                                "#RequestTimeoutSeconds",
-                            ).value = config.RequestTimeoutSeconds || 3;
-                            Dashboard.hideLoadingMsg();
-                        });
+                        )
+                            .then(function (config) {
+                                document.querySelector("#TargetUrl").value =
+                                    config.TargetUrl || "";
+                                document.querySelector("#SharedSecret").value =
+                                    config.SharedSecret || "";
+                                document.querySelector(
+                                    "#RequestTimeoutSeconds",
+                                ).value = config.RequestTimeoutSeconds || 3;
+                                Dashboard.hideLoadingMsg();
+                            })
+                            .catch(function () {
+                                Dashboard.hideLoadingMsg();
+                            });
                     });
 
                 document
@@ -117,28 +121,34 @@
 
                         ApiClient.getPluginConfiguration(
                             JellychConfig.pluginUniqueId,
-                        ).then(function (config) {
-                            config.TargetUrl =
-                                document.querySelector("#TargetUrl").value;
-                            config.SharedSecret =
-                                document.querySelector("#SharedSecret").value;
-                            config.RequestTimeoutSeconds =
-                                parseInt(
+                        )
+                            .then(function (config) {
+                                config.TargetUrl =
+                                    document.querySelector("#TargetUrl").value;
+                                config.SharedSecret =
                                     document.querySelector(
-                                        "#RequestTimeoutSeconds",
-                                    ).value,
-                                    10,
-                                ) || 3;
+                                        "#SharedSecret",
+                                    ).value;
+                                config.RequestTimeoutSeconds =
+                                    parseInt(
+                                        document.querySelector(
+                                            "#RequestTimeoutSeconds",
+                                        ).value,
+                                        10,
+                                    ) || 3;
 
-                            ApiClient.updatePluginConfiguration(
-                                JellychConfig.pluginUniqueId,
-                                config,
-                            ).then(function (result) {
-                                Dashboard.processPluginConfigurationUpdateResult(
-                                    result,
-                                );
+                                return ApiClient.updatePluginConfiguration(
+                                    JellychConfig.pluginUniqueId,
+                                    config,
+                                ).then(function (result) {
+                                    Dashboard.processPluginConfigurationUpdateResult(
+                                        result,
+                                    );
+                                });
+                            })
+                            .catch(function () {
+                                Dashboard.hideLoadingMsg();
                             });
-                        });
 
                         e.preventDefault();
                         return false;

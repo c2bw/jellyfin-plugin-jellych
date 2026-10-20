@@ -1,4 +1,4 @@
-﻿[
+[
     {
         "guid":  "a1f2b3c4-d5e6-4f7a-8b9c-1d2e3f4a5b6c",
         "name":  "Jellych Webhook",
@@ -7,6 +7,14 @@
         "owner":  "c2bw",
         "category":  "General",
         "versions":  [
+                         {
+                             "version":  "1.0.0.2",
+                             "changelog":  "Release 1.0.0.2",
+                             "targetAbi":  "12.0.0.0",
+                             "sourceUrl":  "https://github.com/c2bw/jellyfin-plugin-jellych/raw/refs/tags/1.0.0.2/dist/12.0.0.0-jellychwebhook_1.0.0.2.zip",
+                             "checksum":  "9316d001d79109d558dde189907d8fb6",
+                             "timestamp":  "2026-10-20T18:50:43Z"
+                         },
                          {
                              "version":  "1.0.0.1",
                              "changelog":  "Release 1.0.0.1",

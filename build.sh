@@ -18,5 +18,5 @@ dotnet build Jellyfin.Plugin.Jellych.sln -c Release --no-restore
 echo
 echo "Build succeeded!"
 echo
-echo "Plugin DLL: src/bin/Release/net8.0/Jellych.WebhookPlugin.dll"
+echo "Plugin DLL: Jellyfin.Plugin.Jellych/bin/Release/net10.0/Jellych.WebhookPlugin.dll"
 echo

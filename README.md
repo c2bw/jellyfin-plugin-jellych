@@ -9,8 +9,8 @@ Forward Jellyfin playback events to [jellych](https://github.com/c2bw/jellych) s
 
 ## Compatibility
 
-- **Jellyfin**: 10.11.8+ (tested on 10.11.8)
-- **.NET**: 9.0+
+- **Jellyfin**: 12.0+ (10.11.8+ supported via release 1.0.0.1 in repository manifest)
+- **.NET**: 10.0+
 - **OS**: Windows, Linux, macOS (plugin runs on Jellyfin server)
 
 ## Installation
@@ -64,7 +64,7 @@ Then in Jellyfin admin, open **Dashboard -> Plugins -> Repositories**, add that 
 
 ### Build from Source
 
-**Prerequisites**: .NET 9 SDK
+**Prerequisites**: .NET 10 SDK
 
 ```bash
 git clone https://github.com/c2bw/jellyfin-plugin-jellych.git
@@ -77,7 +77,7 @@ build.bat
 ./build.sh
 ```
 
-Output: `bin/Release/net9.0/Jellych.WebhookPlugin.dll`
+Output: `Jellyfin.Plugin.Jellych/bin/Release/net10.0/Jellych.WebhookPlugin.dll`
 
 For repository publishing automation (build + zip + checksum + manifest update):
 
