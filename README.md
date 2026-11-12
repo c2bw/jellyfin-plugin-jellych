@@ -50,6 +50,20 @@ Then in Jellyfin admin, open **Dashboard -> Plugins -> Repositories**, add that 
 3. **jellych server** → Records active session → Tracks viewer idle time
 4. **Playback Stop** → Plugin detects → Sends stop webhook with the same source name → jellych removes session
 
+## Playback startup and proxy mode
+
+Webhook requests are ordered per Jellyfin session. A slow request for one viewer
+no longer blocks events for other viewers. Channel changes and late stop events
+retain their session ordering.
+
+With a matching updated Jellych server, you can try the tuner URL
+`http://your-jellych-server:8080/api/twitch.m3u?playback=proxy` and refresh the guide.
+The plugin recognizes `/api/live-proxy/<channel>/index.m3u8` and includes
+`playbackMode: "proxy"` in its start webhook. Jellych records the viewer without
+starting its own FFmpeg remux. The default `/api/twitch.m3u` tuner URL retains
+local remux playback; change back to it and refresh the guide to revert.
+Update the plugin as well as Jellych before trying proxy mode.
+
 ## Troubleshooting
 
 ### Webhook not sent
@@ -78,6 +92,12 @@ build.bat
 ```
 
 Output: `Jellyfin.Plugin.Jellych/bin/Release/net10.0/Jellych.WebhookPlugin.dll`
+
+Run the session ordering and playback mode regression tests with:
+
+```sh
+dotnet test Jellyfin.Plugin.Jellych.sln -c Release
+```
 
 For repository publishing automation (build + zip + checksum + manifest update):
 
