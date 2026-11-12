@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
@@ -139,8 +140,18 @@ internal sealed class PlaybackSessionTracker
 {
     public static PlaybackSessionTracker Instance { get; } = new();
 
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Dictionary<string, ActiveSessionState> _activeBySessionId = new(StringComparer.Ordinal);
+    private readonly SessionGate _gate = new();
+    private readonly ConcurrentDictionary<string, ActiveSessionState> _activeBySessionId = new(StringComparer.Ordinal);
+    private readonly Func<string, string, string, ILogger<PlaybackWebhookForwarder>?, CancellationToken, string, Task> _forward;
+
+    internal PlaybackSessionTracker(Func<string, string, string, ILogger<PlaybackWebhookForwarder>?, CancellationToken, string, Task>? forward = null)
+    {
+        _forward = forward ?? PlaybackWebhookDispatcher.ForwardAsync;
+    }
+
+    private Task ForwardAsync(string action, string channel, string sessionId,
+        ILogger<PlaybackWebhookForwarder>? logger, CancellationToken cancellationToken = default, string playbackMode = "")
+        => _forward(action, channel, sessionId, logger, cancellationToken, playbackMode);
 
     public async Task HandlePlaybackStartAsync(
         PlaybackStartEventArgs @event,
@@ -151,53 +162,47 @@ internal sealed class PlaybackSessionTracker
         var sessionId = PlaybackEventConsumerHelpers.GetStableSessionId(@event, hasChannel ? channel : null);
         var playSessionId = NormalizeOptionalId(@event.PlaySessionId);
 
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
+        using var sessionLease = await _gate.AcquireAsync(sessionId).ConfigureAwait(false);
+        if (!hasChannel)
         {
-            if (!hasChannel)
-            {
-                // If this session switched from a Live TV channel to a non-Live-TV item (e.g., movie or VOD)
-                // without first firing PlaybackStopped, stop the previous channel.
-                if (_activeBySessionId.Remove(sessionId, out var previousNonLive))
-                {
-                    consumerLogger?.LogInformation(
-                        "Stopping previous channel {PreviousChannel} because session {SessionId} started non-live playback",
-                        previousNonLive.Channel,
-                        sessionId);
-                    JellychPluginLog.Write(
-                        $"Stopping previous channel {previousNonLive.Channel} because session {sessionId} started non-live playback");
-                    await PlaybackWebhookDispatcher.ForwardAsync("stop", previousNonLive.Channel, sessionId, forwarderLogger)
-                        .ConfigureAwait(false);
-                }
-
-                return;
-            }
-
-            if (_activeBySessionId.TryGetValue(sessionId, out var existing)
-                && !string.Equals(existing.Channel, channel, StringComparison.OrdinalIgnoreCase))
+            // If this session switched from a Live TV channel to a non-Live-TV item (e.g., movie or VOD)
+            // without first firing PlaybackStopped, stop the previous channel.
+            if (_activeBySessionId.TryRemove(sessionId, out var previousNonLive))
             {
                 consumerLogger?.LogInformation(
-                    "Session {SessionId} switched channel from {PreviousChannel} to {NewChannel}; stopping {PreviousChannel}",
-                    sessionId,
-                    existing.Channel,
-                    channel,
-                    existing.Channel);
+                    "Stopping previous channel {PreviousChannel} because session {SessionId} started non-live playback",
+                    previousNonLive.Channel,
+                    sessionId);
                 JellychPluginLog.Write(
-                    $"Session {sessionId} switched channel from {existing.Channel} to {channel}; stopping {existing.Channel}");
-                await PlaybackWebhookDispatcher.ForwardAsync("stop", existing.Channel, sessionId, forwarderLogger)
+                    $"Stopping previous channel {previousNonLive.Channel} because session {sessionId} started non-live playback");
+                await ForwardAsync("stop", previousNonLive.Channel, sessionId, forwarderLogger)
                     .ConfigureAwait(false);
             }
 
-            _activeBySessionId[sessionId] = new ActiveSessionState(channel, playSessionId);
+            return;
+        }
 
-            consumerLogger?.LogInformation("Playback start: {SourceName} (session: {SessionId})", channel, sessionId);
-            JellychPluginLog.Write($"Playback start: {channel} (session: {sessionId}, playSessionId: {playSessionId ?? string.Empty})");
-            await PlaybackWebhookDispatcher.ForwardAsync("start", channel, sessionId, forwarderLogger).ConfigureAwait(false);
-        }
-        finally
+        if (_activeBySessionId.TryGetValue(sessionId, out var existing)
+            && !string.Equals(existing.Channel, channel, StringComparison.OrdinalIgnoreCase))
         {
-            _gate.Release();
+            consumerLogger?.LogInformation(
+                "Session {SessionId} switched channel from {PreviousChannel} to {NewChannel}; stopping {PreviousChannel}",
+                sessionId,
+                existing.Channel,
+                channel,
+                existing.Channel);
+            JellychPluginLog.Write(
+                $"Session {sessionId} switched channel from {existing.Channel} to {channel}; stopping {existing.Channel}");
+            await ForwardAsync("stop", existing.Channel, sessionId, forwarderLogger)
+                .ConfigureAwait(false);
         }
+
+        _activeBySessionId[sessionId] = new ActiveSessionState(channel, playSessionId);
+
+        consumerLogger?.LogInformation("Playback start: {SourceName} (session: {SessionId})", channel, sessionId);
+        JellychPluginLog.Write($"Playback start: {channel} (session: {sessionId}, playSessionId: {playSessionId ?? string.Empty})");
+        await ForwardAsync("start", channel, sessionId, forwarderLogger, playbackMode: PlaybackEventConsumerHelpers.GetPlaybackMode(@event)).ConfigureAwait(false);
+
     }
 
     public async Task HandlePlaybackStopAsync(
@@ -209,70 +214,63 @@ internal sealed class PlaybackSessionTracker
         var sessionId = PlaybackEventConsumerHelpers.GetStableSessionId(@event, hasEventChannel ? eventChannel : null);
         var stopPlaySessionId = NormalizeOptionalId(@event.PlaySessionId);
 
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
+        using var sessionLease = await _gate.AcquireAsync(sessionId).ConfigureAwait(false);
+        if (_activeBySessionId.TryGetValue(sessionId, out var active))
         {
-            if (_activeBySessionId.TryGetValue(sessionId, out var active))
+            // If this stop event targets a different channel than the one currently active on this session,
+            // the previous channel was already stopped when the new channel started.
+            if (hasEventChannel && !string.Equals(active.Channel, eventChannel, StringComparison.OrdinalIgnoreCase))
             {
-                // If this stop event targets a different channel than the one currently active on this session,
-                // the previous channel was already stopped when the new channel started.
-                if (hasEventChannel && !string.Equals(active.Channel, eventChannel, StringComparison.OrdinalIgnoreCase))
-                {
-                    consumerLogger?.LogDebug(
-                        "Ignoring late playback stop for {EventChannel} on session {SessionId} (currently active: {ActiveChannel})",
-                        eventChannel,
-                        sessionId,
-                        active.Channel);
-                    JellychPluginLog.Write(
-                        $"Ignoring late playback stop for {eventChannel} on session {sessionId} (currently active: {active.Channel})");
-                    return;
-                }
-
-                // If the event is explicitly for a non-Live-TV item while a channel was tracked, only ignore if Item/MediaInfo is present and non-live.
-                if (!hasEventChannel && (@event.Item is not null || @event.MediaInfo is not null))
-                {
-                    return;
-                }
-
-                // If both the active state and the stop event have PlaySessionIds and they differ,
-                // a newer PlaySessionId (e.g., from a quality/bitrate change or stream reload) has superseded the stopped one.
-                if (!string.IsNullOrEmpty(active.PlaySessionId)
-                    && !string.IsNullOrEmpty(stopPlaySessionId)
-                    && !string.Equals(active.PlaySessionId, stopPlaySessionId, StringComparison.Ordinal))
-                {
-                    consumerLogger?.LogInformation(
-                        "Ignoring stale playback stop for {Channel} (session: {SessionId}, stoppedPlaySessionId: {StoppedPlaySessionId}, activePlaySessionId: {ActivePlaySessionId})",
-                        active.Channel,
-                        sessionId,
-                        stopPlaySessionId,
-                        active.PlaySessionId);
-                    JellychPluginLog.Write(
-                        $"Ignoring stale playback stop for {active.Channel} (session: {sessionId}, stoppedPlaySessionId: {stopPlaySessionId}, activePlaySessionId: {active.PlaySessionId})");
-                    return;
-                }
-
-                _activeBySessionId.Remove(sessionId);
-                var channelToStop = hasEventChannel ? eventChannel : active.Channel;
-
-                consumerLogger?.LogInformation("Playback stop: {SourceName} (session: {SessionId})", channelToStop, sessionId);
-                JellychPluginLog.Write($"Playback stop: {channelToStop} (session: {sessionId}, playSessionId: {stopPlaySessionId ?? string.Empty})");
-                await PlaybackWebhookDispatcher.ForwardAsync("stop", channelToStop, sessionId, forwarderLogger).ConfigureAwait(false);
+                consumerLogger?.LogDebug(
+                    "Ignoring late playback stop for {EventChannel} on session {SessionId} (currently active: {ActiveChannel})",
+                    eventChannel,
+                    sessionId,
+                    active.Channel);
+                JellychPluginLog.Write(
+                    $"Ignoring late playback stop for {eventChannel} on session {sessionId} (currently active: {active.Channel})");
                 return;
             }
 
-            if (!hasEventChannel)
+            // If the event is explicitly for a non-Live-TV item while a channel was tracked, only ignore if Item/MediaInfo is present and non-live.
+            if (!hasEventChannel && (@event.Item is not null || @event.MediaInfo is not null))
             {
                 return;
             }
 
-            consumerLogger?.LogInformation("Playback stop: {SourceName} (session: {SessionId})", eventChannel, sessionId);
-            JellychPluginLog.Write($"Playback stop: {eventChannel} (session: {sessionId}, playSessionId: {stopPlaySessionId ?? string.Empty})");
-            await PlaybackWebhookDispatcher.ForwardAsync("stop", eventChannel, sessionId, forwarderLogger).ConfigureAwait(false);
+            // If both the active state and the stop event have PlaySessionIds and they differ,
+            // a newer PlaySessionId (e.g., from a quality/bitrate change or stream reload) has superseded the stopped one.
+            if (!string.IsNullOrEmpty(active.PlaySessionId)
+                && !string.IsNullOrEmpty(stopPlaySessionId)
+                && !string.Equals(active.PlaySessionId, stopPlaySessionId, StringComparison.Ordinal))
+            {
+                consumerLogger?.LogInformation(
+                    "Ignoring stale playback stop for {Channel} (session: {SessionId}, stoppedPlaySessionId: {StoppedPlaySessionId}, activePlaySessionId: {ActivePlaySessionId})",
+                    active.Channel,
+                    sessionId,
+                    stopPlaySessionId,
+                    active.PlaySessionId);
+                JellychPluginLog.Write(
+                    $"Ignoring stale playback stop for {active.Channel} (session: {sessionId}, stoppedPlaySessionId: {stopPlaySessionId}, activePlaySessionId: {active.PlaySessionId})");
+                return;
+            }
+
+            _activeBySessionId.TryRemove(sessionId, out _);
+            var channelToStop = hasEventChannel ? eventChannel : active.Channel;
+
+            consumerLogger?.LogInformation("Playback stop: {SourceName} (session: {SessionId})", channelToStop, sessionId);
+            JellychPluginLog.Write($"Playback stop: {channelToStop} (session: {sessionId}, playSessionId: {stopPlaySessionId ?? string.Empty})");
+            await ForwardAsync("stop", channelToStop, sessionId, forwarderLogger).ConfigureAwait(false);
+            return;
         }
-        finally
+
+        if (!hasEventChannel)
         {
-            _gate.Release();
+            return;
         }
+
+        consumerLogger?.LogInformation("Playback stop: {SourceName} (session: {SessionId})", eventChannel, sessionId);
+        JellychPluginLog.Write($"Playback stop: {eventChannel} (session: {sessionId}, playSessionId: {stopPlaySessionId ?? string.Empty})");
+        await ForwardAsync("stop", eventChannel, sessionId, forwarderLogger).ConfigureAwait(false);
     }
 
     public async Task HandleSessionEndedAsync(
@@ -288,61 +286,48 @@ internal sealed class PlaybackSessionTracker
 
         var sessionId = session.Id.Trim();
 
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
+        using var sessionLease = await _gate.AcquireAsync(sessionId).ConfigureAwait(false);
+        string? channelToStop = null;
+        if (_activeBySessionId.TryRemove(sessionId, out var active))
         {
-            string? channelToStop = null;
-            if (_activeBySessionId.Remove(sessionId, out var active))
-            {
-                channelToStop = active.Channel;
-            }
-            else if (PlaybackEventConsumerHelpers.TryResolveLiveChannelFromDto(session.NowPlayingItem, out var dtoChannel))
-            {
-                channelToStop = dtoChannel;
-            }
-
-            if (string.IsNullOrEmpty(channelToStop))
-            {
-                return;
-            }
-
-            consumerLogger?.LogInformation("Session ended while playing {SourceName} (session: {SessionId}); sending stop webhook", channelToStop, sessionId);
-            JellychPluginLog.Write($"Session ended while playing {channelToStop} (session: {sessionId}); sending stop webhook");
-            await PlaybackWebhookDispatcher.ForwardAsync("stop", channelToStop, sessionId, forwarderLogger).ConfigureAwait(false);
+            channelToStop = active.Channel;
         }
-        finally
+        else if (PlaybackEventConsumerHelpers.TryResolveLiveChannelFromDto(session.NowPlayingItem, out var dtoChannel))
         {
-            _gate.Release();
+            channelToStop = dtoChannel;
         }
+
+        if (string.IsNullOrEmpty(channelToStop))
+        {
+            return;
+        }
+
+        consumerLogger?.LogInformation("Session ended while playing {SourceName} (session: {SessionId}); sending stop webhook", channelToStop, sessionId);
+        JellychPluginLog.Write($"Session ended while playing {channelToStop} (session: {sessionId}); sending stop webhook");
+        await ForwardAsync("stop", channelToStop, sessionId, forwarderLogger).ConfigureAwait(false);
     }
 
     public async Task StopAllActiveSessionsAsync(
         ILogger<PlaybackWebhookForwarder>? forwarderLogger,
         CancellationToken cancellationToken = default)
     {
-        List<KeyValuePair<string, ActiveSessionState>> snapshot;
-
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        // Take each session's lock so its pending start completes before its stop.
+        // Different sessions can drain concurrently even if one endpoint is slow.
+        var tasks = new List<Task>();
+        foreach (var entry in _activeBySessionId)
         {
-            if (_activeBySessionId.Count == 0)
-            {
-                return;
-            }
-
-            snapshot = new List<KeyValuePair<string, ActiveSessionState>>(_activeBySessionId);
-            _activeBySessionId.Clear();
+            tasks.Add(StopSessionAsync(entry.Key, forwarderLogger, cancellationToken));
         }
-        finally
-        {
-            _gate.Release();
-        }
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
 
-        foreach (var entry in snapshot)
+    private async Task StopSessionAsync(string sessionId, ILogger<PlaybackWebhookForwarder>? logger, CancellationToken cancellationToken)
+    {
+        using var sessionLease = await _gate.AcquireAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        if (_activeBySessionId.TryRemove(sessionId, out var active))
         {
-            JellychPluginLog.Write($"Stopping active session on plugin shutdown: {entry.Value.Channel} (session: {entry.Key})");
-            await PlaybackWebhookDispatcher.ForwardAsync("stop", entry.Value.Channel, entry.Key, forwarderLogger, cancellationToken)
-                .ConfigureAwait(false);
+            JellychPluginLog.Write($"Stopping active session on plugin shutdown: {active.Channel} (session: {sessionId})");
+            await ForwardAsync("stop", active.Channel, sessionId, logger, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -354,6 +339,10 @@ internal sealed class PlaybackSessionTracker
 
 internal static class PlaybackEventConsumerHelpers
 {
+    public static string GetPlaybackMode(PlaybackProgressEventArgs @event)
+        => PlaybackWebhookForwarder.IsProxyLivePath(@event.Item?.Path)
+            || PlaybackWebhookForwarder.IsProxyLivePath(@event.MediaInfo?.Path) ? "proxy" : "remux";
+
     public static bool TryResolveLiveChannel(PlaybackProgressEventArgs @event, out string channel)
     {
         channel = string.Empty;
@@ -479,7 +468,8 @@ internal static class PlaybackWebhookDispatcher
         string sourceName,
         string sessionId,
         ILogger<PlaybackWebhookForwarder>? logger,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string playbackMode = "")
     {
         try
         {
@@ -488,7 +478,7 @@ internal static class PlaybackWebhookDispatcher
 
             if (string.Equals(action, "start", StringComparison.OrdinalIgnoreCase))
             {
-                await forwarder.OnPlaybackStartAsync(sourceName, sessionId, cancellationToken).ConfigureAwait(false);
+                await forwarder.OnPlaybackStartAsync(sourceName, sessionId, cancellationToken, playbackMode).ConfigureAwait(false);
             }
             else if (string.Equals(action, "stop", StringComparison.OrdinalIgnoreCase))
             {

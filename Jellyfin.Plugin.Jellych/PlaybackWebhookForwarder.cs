@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -40,7 +41,7 @@ public sealed class PlaybackWebhookForwarder : IDisposable
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex LivePathChannelRegex = new(
-        @"/live/([A-Za-z0-9_]{1,64})/index\.m3u8(?:$|\?)",
+        @"/(?:live|api/live-proxy)/([A-Za-z0-9_]{1,64})/index\.m3u8(?:$|\?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly ILogger<PlaybackWebhookForwarder>? _logger;
@@ -55,6 +56,12 @@ public sealed class PlaybackWebhookForwarder : IDisposable
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _logger = logger;
+    }
+
+    internal static bool IsProxyLivePath(string? pathOrUrl)
+    {
+        var match = LivePathChannelRegex.Match(pathOrUrl ?? string.Empty);
+        return match.Success && match.Value.StartsWith("/api/live-proxy/", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -116,9 +123,10 @@ public sealed class PlaybackWebhookForwarder : IDisposable
     /// <param name="sourceName">Playback source or channel name.</param>
     /// <param name="sessionId">Stable Jellyfin session identifier.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="playbackMode">Playback path (remux or proxy).</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    public Task OnPlaybackStartAsync(string sourceName, string sessionId, CancellationToken cancellationToken = default)
-        => SendAsync("start", sourceName, sessionId, cancellationToken);
+    public Task OnPlaybackStartAsync(string sourceName, string sessionId, CancellationToken cancellationToken = default, string playbackMode = "")
+        => SendAsync("start", sourceName, sessionId, cancellationToken, playbackMode);
 
     /// <summary>
     /// Sends a playback stop webhook to jellych.
@@ -179,7 +187,7 @@ public sealed class PlaybackWebhookForwarder : IDisposable
         }
     }
 
-    private async Task SendAsync(string action, string sourceName, string sessionId, CancellationToken cancellationToken)
+    private async Task SendAsync(string action, string sourceName, string sessionId, CancellationToken cancellationToken, string playbackMode = "")
     {
         if (!TryExtractChannelName(sourceName, out var channel))
         {
@@ -194,6 +202,7 @@ public sealed class PlaybackWebhookForwarder : IDisposable
             Action = action,
             Channel = channel,
             SessionId = sessionId,
+            PlaybackMode = playbackMode == "proxy" ? "proxy" : null,
         };
         var payloadJson = JsonSerializer.Serialize(payload, JsonOptions);
 
@@ -316,4 +325,8 @@ public sealed class WebhookPayload
     /// Gets or sets the Jellyfin playback session identifier.
     /// </summary>
     public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the playback path (remux or proxy).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PlaybackMode { get; set; }
 }
